@@ -77,6 +77,11 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"Remote Cursor", body)
 
+        status, headers, body = self.request("GET", "/vendor/codicons.svg")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "image/svg+xml")
+        self.assertIn(b'id="layout-sidebar-left"', body)
+
     def test_profile_and_avatar_endpoints(self) -> None:
         status, _, body = self.request("GET", "/api/profile")
         self.assertEqual(status, 200)
