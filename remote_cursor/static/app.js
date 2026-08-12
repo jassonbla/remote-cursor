@@ -34,6 +34,8 @@ const elements = {
   scrim: document.querySelector("#sidebar-scrim"),
   branchContext: document.querySelector("#branch-context"),
   branchName: document.querySelector("#branch-name"),
+  prChipList: document.querySelector("#pr-chip-list"),
+  goBottom: document.querySelector("#go-bottom"),
 };
 
 function node(tag, className, text) {
@@ -45,15 +47,18 @@ function node(tag, className, text) {
 
 function icon(kind) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.classList.add("codicon");
   svg.setAttribute("aria-hidden", "true");
-  const paths = {
-    folder: '<path d="M2.5 5.2h4l1.4-1.4h5.6v8.4H2.5z"/>',
-    folderClosed: '<path d="M2.5 4.5h4l1.4 1.4h5.6v6.3H2.5z"/>',
-    chevron: '<path d="m6 4.5 3.5 3.5L6 11.5"/>',
-    tool: '<path d="m9.7 3.3 3-1-1 3-5.8 5.8-2 1 1-2zM9.8 3.2l3 3"/>',
+  const names = {
+    folder: "folder-opened",
+    folderClosed: "folder",
+    chevron: "chevron-right",
+    file: "file",
+    tool: "tools",
   };
-  svg.innerHTML = paths[kind] || paths.tool;
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `/vendor/codicons.svg#${names[kind] || names.tool}`);
+  svg.append(use);
   return svg;
 }
 
@@ -170,6 +175,8 @@ function renderConversationLoading() {
   elements.branchName.textContent = "";
   elements.branchContext.hidden = true;
   elements.branchContext.title = "";
+  renderPullRequests([]);
+  elements.goBottom.hidden = true;
   const loading = node("div", "messages");
   for (let index = 0; index < 5; index += 1) {
     const skeleton = node("div", "skeleton");
@@ -214,6 +221,68 @@ function appendInline(parent, text) {
   parent.append(document.createTextNode(text.slice(cursor)));
 }
 
+function splitTableRow(line) {
+  let source = String(line || "").trim();
+  if (source.startsWith("|")) source = source.slice(1);
+  if (source.endsWith("|")) {
+    let backslashes = 0;
+    for (let index = source.length - 2; index >= 0 && source[index] === "\\"; index -= 1) backslashes += 1;
+    if (backslashes % 2 === 0) source = source.slice(0, -1);
+  }
+
+  const cells = [];
+  let cell = "";
+  let inCode = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (character === "\\" && ["|", "\\", "`"].includes(next)) {
+      cell += next;
+      index += 1;
+    } else if (character === "`") {
+      inCode = !inCode;
+      cell += character;
+    } else if (character === "|" && !inCode) {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function tableAlignment(delimiter) {
+  const value = String(delimiter || "").trim();
+  if (!/^:?-{3,}:?$/.test(value)) return false;
+  if (value.startsWith(":") && value.endsWith(":")) return "center";
+  if (value.endsWith(":")) return "right";
+  return "left";
+}
+
+function parseTableHeader(lines, index) {
+  if (index + 1 >= lines.length || !lines[index].includes("|")) return null;
+  const headers = splitTableRow(lines[index]);
+  const delimiters = splitTableRow(lines[index + 1]);
+  if (headers.length < 2 || delimiters.length !== headers.length) return null;
+  const alignments = delimiters.map(tableAlignment);
+  if (alignments.some((alignment) => alignment === false)) return null;
+  return { headers, alignments };
+}
+
+function appendTableRow(parent, values, alignments, tagName) {
+  const row = node("tr");
+  for (let index = 0; index < alignments.length; index += 1) {
+    const cell = node(tagName);
+    if (tagName === "th") cell.scope = "col";
+    cell.style.textAlign = alignments[index];
+    appendInline(cell, values[index] || "");
+    row.append(cell);
+  }
+  parent.append(row);
+}
+
 function renderMarkdown(text) {
   const shell = node("div", "text-block markdown");
   const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
@@ -245,6 +314,28 @@ function renderMarkdown(text) {
       index += 1;
       continue;
     }
+    const tableHeader = parseTableHeader(lines, index);
+    if (tableHeader) {
+      flushParagraph();
+      const wrapper = node("div", "markdown-table-shell");
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute("aria-label", "Scrollable table");
+      const table = node("table", "markdown-table");
+      const head = node("thead");
+      appendTableRow(head, tableHeader.headers, tableHeader.alignments, "th");
+      table.append(head);
+
+      const body = node("tbody");
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+        appendTableRow(body, splitTableRow(lines[index]), tableHeader.alignments, "td");
+        index += 1;
+      }
+      table.append(body);
+      wrapper.append(table);
+      shell.append(wrapper);
+      continue;
+    }
     if (!line.trim()) {
       flushParagraph();
       index += 1;
@@ -271,12 +362,17 @@ function renderMarkdown(text) {
       shell.append(list);
       continue;
     }
-    if (/^\s*\d+\.\s+/.test(line)) {
+    const orderedItem = line.match(/^\s*(\d+)\.\s+(.+)$/);
+    if (orderedItem) {
       flushParagraph();
       const list = node("ol");
-      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+      list.start = Number(orderedItem[1]);
+      while (index < lines.length) {
+        const itemMatch = lines[index].match(/^\s*(\d+)\.\s+(.+)$/);
+        if (!itemMatch) break;
         const item = node("li");
-        appendInline(item, lines[index].replace(/^\s*\d+\.\s+/, ""));
+        item.value = Number(itemMatch[1]);
+        appendInline(item, itemMatch[2]);
         list.append(item);
         index += 1;
       }
@@ -320,7 +416,7 @@ function renderTextBlock(text, role) {
     for (const path of parsed.attachments) {
       const chip = node("span", "attachment-chip");
       chip.title = path;
-      chip.append(icon("folder"), node("span", "", path.split("/").filter(Boolean).at(-1) || "첨부 파일"));
+      chip.append(icon("file"), node("span", "", path.split("/").filter(Boolean).at(-1) || "첨부 파일"));
       attachments.append(chip);
     }
     shell.append(attachments);
@@ -396,6 +492,77 @@ function renderAssistantContent(messages) {
   return body;
 }
 
+function renderAssistantTurn(messages) {
+  const response = node("div", "assistant-response");
+  let finalIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].isFinal) {
+      finalIndex = index;
+      break;
+    }
+  }
+  if (finalIndex < 0) finalIndex = Math.max(0, messages.length - 1);
+
+  const workMessages = messages.slice(0, finalIndex);
+  const finalMessages = messages.slice(finalIndex);
+  if (workMessages.length) {
+    const work = node("details", "work-trace");
+    work.append(node("summary", "work-status", "Worked"), renderAssistantContent(workMessages));
+    response.append(work);
+  } else {
+    response.append(node("div", "work-status", "Worked"));
+  }
+  if (finalMessages.length) response.append(renderAssistantContent(finalMessages));
+  return response;
+}
+
+function renderPullRequests(pullRequests) {
+  elements.prChipList.replaceChildren();
+  const statuses = {
+    merged: { label: "merged", icon: "git-merge" },
+    open: { label: "open", icon: "git-pull-request" },
+    closed: { label: "closed", icon: "git-pull-request-closed" },
+    unknown: { label: "status unknown", icon: "git-pull-request" },
+  };
+  for (const pullRequest of Array.isArray(pullRequests) ? pullRequests : []) {
+    if (!pullRequest?.url || !pullRequest?.number) continue;
+    const statusName = Object.hasOwn(statuses, pullRequest.status) ? pullRequest.status : "unknown";
+    const status = statuses[statusName];
+    const repository = String(pullRequest.repository || "");
+    const repositoryName = repository.split("/").filter(Boolean).at(-1) || "PR";
+    const link = node("a", `pr-chip pr-chip--${statusName}`);
+    link.href = pullRequest.url;
+    link.target = "_blank";
+    link.rel = "noreferrer noopener";
+    link.setAttribute("aria-label", `${repository || repositoryName} pull request ${pullRequest.number}, ${status.label}`);
+    link.title = [pullRequest.title, `${repository} #${pullRequest.number}`, status.label].filter(Boolean).join(" · ");
+    const statusIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    statusIcon.classList.add("codicon", "pr-chip-status");
+    statusIcon.setAttribute("aria-hidden", "true");
+    const statusUse = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    statusUse.setAttribute("href", `/vendor/codicons.svg#${status.icon}`);
+    statusIcon.append(statusUse);
+    link.append(
+      statusIcon,
+      node("span", "pr-chip-label", `#${pullRequest.number}`),
+    );
+    elements.prChipList.append(link);
+  }
+  elements.prChipList.hidden = !elements.prChipList.childElementCount;
+}
+
+let goBottomFrame;
+function syncGoBottomVisibility() {
+  goBottomFrame = undefined;
+  const distance = elements.content.scrollHeight - elements.content.scrollTop - elements.content.clientHeight;
+  elements.goBottom.hidden = !elements.content.querySelector(".messages") || distance < 160;
+}
+
+function queueGoBottomSync() {
+  if (goBottomFrame) return;
+  goBottomFrame = requestAnimationFrame(syncGoBottomVisibility);
+}
+
 function renderConversation(conversation) {
   elements.title.textContent = conversation.title;
   elements.title.title = conversation.title;
@@ -405,11 +572,13 @@ function renderConversation(conversation) {
   elements.branchName.textContent = branch;
   elements.branchContext.hidden = !branch;
   elements.branchContext.title = branch ? `이 세션의 브랜치: ${branch}` : "";
+  renderPullRequests(conversation.pullRequests);
 
   if (!conversation.hasTranscript) {
     const empty = node("div", "empty-state");
     empty.append(node("h3", "", "로컬 대화 원본이 없습니다"), node("p", "", "Cursor 검색 인덱스에는 있지만 로컬 transcript가 없는 세션입니다."));
     elements.content.replaceChildren(empty);
+    queueGoBottomSync();
     return;
   }
 
@@ -422,20 +591,20 @@ function renderConversation(conversation) {
       article.append(user);
     }
     if (turn.assistant.length) {
-      const response = node("div", "assistant-response");
-      const status = node("div", "work-status", "Worked");
-      response.append(status, renderAssistantContent(turn.assistant));
-      article.append(response);
+      article.append(renderAssistantTurn(turn.assistant));
     }
     messages.append(article);
   }
   elements.content.replaceChildren(messages);
+  queueGoBottomSync();
 }
 
 function renderError(title, message) {
   elements.branchName.textContent = "";
   elements.branchContext.hidden = true;
   elements.branchContext.title = "";
+  renderPullRequests([]);
+  elements.goBottom.hidden = true;
   const shell = node("div", "error-state");
   shell.append(node("h3", "", title), node("p", "", message));
   elements.content.replaceChildren(shell);
@@ -611,6 +780,17 @@ elements.collapsedSearch.addEventListener("click", () => {
 });
 elements.scrim.addEventListener("click", closeSidebar);
 sidebarMedia.addEventListener("change", syncSidebarControls);
+elements.content.addEventListener("scroll", queueGoBottomSync, { passive: true });
+elements.goBottom.addEventListener("click", () => {
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  elements.content.scrollTo({ top: elements.content.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+  elements.announcer.textContent = "대화 하단으로 이동했습니다.";
+});
+new MutationObserver(queueGoBottomSync).observe(elements.content, {
+  attributes: true,
+  childList: true,
+  subtree: true,
+});
 syncSidebarControls();
 
 function connectEvents() {

@@ -83,3 +83,7 @@ make check
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the read-only boundary and Phase 2 design constraints.
+
+## License
+
+[MIT](LICENSE). The bundled Codicons subset is licensed separately; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).

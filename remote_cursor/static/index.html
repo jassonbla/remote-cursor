@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#141819" />
     <title>Remote Cursor</title>
-    <link rel="stylesheet" href="/styles.css?v=20260812-7" />
-    <script src="/app.js?v=20260812-7" defer></script>
+    <link rel="stylesheet" href="/styles.css?v=20260812-22" />
+    <script src="/app.js?v=20260812-21" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#conversation">대화로 바로가기</a>
@@ -15,20 +15,20 @@
       <aside class="sidebar" id="sidebar" aria-label="에이전트 세션">
         <div class="sidebar-windowbar">
           <button class="icon-button sidebar-collapse-button" id="close-sidebar" type="button" aria-label="사이드바 접기" aria-controls="sidebar" aria-expanded="true">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/></svg>
+            <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#layout-sidebar-left"></use></svg>
           </button>
         </div>
 
         <nav class="primary-nav" aria-label="세션 도구">
           <button class="primary-nav-button" id="search-toggle" type="button" aria-expanded="false" aria-controls="search-panel">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.5 3.5"/></svg>
+            <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#search"></use></svg>
             <span>Search</span><kbd>⌘K</kbd>
           </button>
         </nav>
 
         <div class="search-panel" id="search-panel" hidden>
           <label class="search-field" for="search-input">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.5 3.5"/></svg>
+            <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#search"></use></svg>
             <span class="visually-hidden">세션 검색</span>
             <input id="search-input" type="search" placeholder="Search sessions" autocomplete="off" />
             <span class="search-count" id="session-count" aria-live="polite"></span>
@@ -41,12 +41,12 @@
               <h2 class="section-label" id="repositories-heading">
                 <button class="repositories-toggle" id="repositories-toggle" type="button" aria-expanded="true" aria-controls="session-list">
                   <span>Repositories</span>
-                  <svg class="disclosure-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6"/></svg>
+                  <svg class="codicon disclosure-chevron" aria-hidden="true"><use href="/vendor/codicons.svg#chevron-down"></use></svg>
                 </button>
               </h2>
               <div class="section-actions">
                 <button class="micro-button" id="archive-toggle" type="button" aria-pressed="false" aria-label="보관된 세션 보기" title="보관된 세션 보기">
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M5 8h6M7 12h2"/></svg>
+                  <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#filter"></use></svg>
                 </button>
               </div>
             </div>
@@ -75,10 +75,10 @@
         <header class="conversation-header">
           <div class="collapsed-sidebar-tools">
             <button class="icon-button sidebar-expand-button" id="open-sidebar" type="button" aria-label="사이드바 펼치기" aria-controls="sidebar" aria-expanded="false">
-              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/></svg>
+              <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#layout-sidebar-left"></use></svg>
             </button>
             <button class="icon-button collapsed-search-button" id="collapsed-search" type="button" aria-label="세션 검색">
-              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.5 3.5"/></svg>
+              <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#search"></use></svg>
             </button>
           </div>
           <div class="conversation-heading">
@@ -96,16 +96,23 @@
 
         <footer class="composer-shell" aria-label="메시지 작성 기능 상태">
           <div class="composer-inner">
-            <span class="canvas-chip">Read-only mirror</span>
+            <div class="session-chip-row">
+              <div class="session-chip-strip" aria-label="관련 pull request">
+                <span class="pr-chip-list" id="pr-chip-list" hidden></span>
+              </div>
+              <button class="go-bottom-button" id="go-bottom" type="button" aria-label="대화 하단으로 이동" title="Go to bottom" hidden>
+                <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#arrow-down"></use></svg>
+              </button>
+            </div>
             <div class="composer-disabled" aria-disabled="true" title="메시지 전송은 Phase 2에서 제공됩니다">
-              <span class="composer-plus" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></span>
+              <span class="composer-plus" aria-hidden="true"><svg class="codicon"><use href="/vendor/codicons.svg#add"></use></svg></span>
               <span class="composer-placeholder">Send follow-up</span>
-              <span class="composer-mode">Phase 2 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5.5 6.5 2.5 2.5 2.5-2.5"/></svg></span>
-              <span class="composer-mic" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="5.5" y="2.5" width="5" height="8" rx="2.5"/><path d="M3.5 8.5a4.5 4.5 0 0 0 9 0M8 13v1.5"/></svg></span>
+              <span class="composer-mode">Phase 2 <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#chevron-down"></use></svg></span>
+              <span class="composer-mic" aria-hidden="true"><svg class="codicon"><use href="/vendor/codicons.svg#mic"></use></svg></span>
             </div>
             <div class="context-bar">
               <span class="context-item branch-context" id="branch-context" hidden>
-                <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3.5" r="1.25"/><circle cx="4" cy="12.5" r="1.25"/><circle cx="12" cy="5.5" r="1.25"/><path d="M4 4.75v6.5M5.25 10.5h1.5A5.25 5.25 0 0 0 12 5.25"/></svg>
+                <svg class="codicon" aria-hidden="true"><use href="/vendor/codicons.svg#git-branch"></use></svg>
                 <span id="branch-name"></span>
               </span>
             </div>

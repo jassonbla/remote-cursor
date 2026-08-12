@@ -3,10 +3,10 @@ name = "remote-cursor"
 version = "0.1.0"
 description = "Read-only web mirror for Cursor's Agent Window"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
 
 [project.scripts]
 remote-cursor = "remote_cursor.server:main"
 
 [tool.unittest]
 start-directory = "tests"
-

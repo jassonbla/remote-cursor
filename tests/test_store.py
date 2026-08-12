@@ -59,6 +59,9 @@ class CursorStoreTest(unittest.TestCase):
                                 "props": {
                                     "ownerAgentId": "agent-1",
                                     "branchName": "feat/remote-branch",
+                                    "prUrl": "https://github.com/example/mirror/pull/42",
+                                    "prTitle": "Ship the mobile mirror",
+                                    "prStatusIcon": "git-merge",
                                 },
                             }
                         }
@@ -97,7 +100,17 @@ class CursorStoreTest(unittest.TestCase):
         directory.mkdir(parents=True)
         path = directory / "agent-1.jsonl"
         rows = [
-            {"role": "user", "message": {"content": [{"type": "text", "text": "Hello"}]}},
+            {
+                "role": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Review https://github.com/example/mirror/pull/42",
+                        }
+                    ]
+                },
+            },
             {
                 "role": "assistant",
                 "message": {
@@ -149,8 +162,42 @@ class CursorStoreTest(unittest.TestCase):
         assert conversation is not None
         self.assertEqual(conversation["messageCount"], 2)
         self.assertEqual(conversation["messages"][1]["content"][1]["name"], "Read")
+        self.assertTrue(conversation["messages"][1]["isFinal"])
+        self.assertEqual(conversation["messages"][1]["turnStatus"], "success")
         self.assertEqual(conversation["branch"], "feat/remote-branch")
+        self.assertEqual(
+            conversation["pullRequests"],
+            [
+                {
+                    "url": "https://github.com/example/mirror/pull/42",
+                    "number": 42,
+                    "repository": "example/mirror",
+                    "title": "Ship the mobile mirror",
+                    "status": "merged",
+                }
+            ],
+        )
         self.assertTrue(conversation["readOnly"])
+
+    def test_does_not_guess_pr_status_when_multiple_links_are_ambiguous(self) -> None:
+        messages = [
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "https://github.com/example/a/pull/1 "
+                            "https://github.com/example/b/pull/2"
+                        ),
+                    }
+                ]
+            }
+        ]
+        records = [{"url": None, "statusIcon": "git-merge", "lastActiveTime": 300}]
+
+        pull_requests = self.store._pull_requests(messages, records)
+
+        self.assertEqual([item["status"] for item in pull_requests], ["unknown", "unknown"])
 
     def test_search_uses_fts_index(self) -> None:
         self._write_transcript()
@@ -173,6 +220,41 @@ class CursorStoreTest(unittest.TestCase):
         assert conversation is not None
         self.assertEqual(conversation["messages"], [])
         self.assertFalse(conversation["hasTranscript"])
+
+    def test_hides_mcp_meta_tool_injection_but_preserves_normal_mentions(self) -> None:
+        hidden = CursorStore._normalize_message(
+            {
+                "role": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "<mcp_meta_tools>\nInternal tool schema\n</mcp_meta_tools>",
+                        }
+                    ]
+                },
+            },
+            1,
+        )
+        visible = CursorStore._normalize_message(
+            {
+                "role": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Why is <mcp_meta_tools> visible?",
+                        }
+                    ]
+                },
+            },
+            2,
+        )
+
+        self.assertIsNone(hidden)
+        self.assertIsNotNone(visible)
+        assert visible is not None
+        self.assertEqual(visible["content"][0]["text"], "Why is <mcp_meta_tools> visible?")
 
 
 if __name__ == "__main__":

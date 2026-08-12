@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+GITHUB_PULL_REQUEST_RE = re.compile(
+    r"https://github\.com/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/pull/(?P<number>\d+)"
+)
+HIDDEN_INTERNAL_BLOCK_RE = re.compile(
+    r"^\s*<mcp_meta_tools>[\s\S]*</mcp_meta_tools>\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -221,6 +231,15 @@ class CursorStore:
                             raw = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+                        if isinstance(raw, dict) and raw.get("type") == "turn_ended":
+                            for previous in reversed(messages):
+                                if previous.get("role") == "user":
+                                    break
+                                if previous.get("role") == "assistant":
+                                    previous["isFinal"] = True
+                                    previous["turnStatus"] = raw.get("status")
+                                    break
+                            continue
                         normalized = self._normalize_message(raw, line_number)
                         if normalized is not None:
                             messages.append(normalized)
@@ -229,6 +248,7 @@ class CursorStore:
 
         meta_file = self._chat_meta(conversation_id)
         tab_metadata = self._session_tab_metadata(conversation_id)
+        pull_requests = self._pull_requests(messages, tab_metadata.get("pullRequestRecords", []))
         title = (metadata or {}).get("title") or meta_file.get("title") or "Untitled agent"
         return {
             "id": conversation_id,
@@ -241,6 +261,7 @@ class CursorStore:
             "hasTranscript": transcript is not None,
             "transcriptPath": str(transcript) if transcript else None,
             "branch": tab_metadata.get("branchName"),
+            "pullRequests": pull_requests,
             "readOnly": True,
         }
 
@@ -325,7 +346,7 @@ class CursorStore:
             return default
 
     def _session_tab_metadata(self, conversation_id: str) -> dict[str, Any]:
-        """Return the most recently active Cursor tab metadata for an agent."""
+        """Return branch and pull-request metadata from Cursor tabs for an agent."""
         if not self.paths.global_state.exists():
             return {}
 
@@ -353,15 +374,91 @@ class CursorStore:
                 props = tab.get("props")
                 if not isinstance(props, dict) or props.get("ownerAgentId") != conversation_id:
                     continue
-                branch_name = props.get("branchName")
-                if not isinstance(branch_name, str) or not branch_name.strip():
-                    continue
                 last_active = tab.get("lastActiveTime")
                 matches.append((last_active if isinstance(last_active, int) else 0, props))
 
         if not matches:
             return {}
-        return max(matches, key=lambda item: item[0])[1]
+
+        branch_matches = [
+            item
+            for item in matches
+            if isinstance(item[1].get("branchName"), str) and item[1]["branchName"].strip()
+        ]
+        branch_name = max(branch_matches, key=lambda item: item[0])[1]["branchName"] if branch_matches else None
+        pull_request_records = []
+        for last_active, props in matches:
+            if not any(props.get(key) for key in ("prUrl", "prTitle", "prStatusIcon")):
+                continue
+            pull_request_records.append(
+                {
+                    "url": props.get("prUrl"),
+                    "title": props.get("prTitle"),
+                    "statusIcon": props.get("prStatusIcon"),
+                    "lastActiveTime": last_active,
+                }
+            )
+        return {"branchName": branch_name, "pullRequestRecords": pull_request_records}
+
+    @classmethod
+    def _pull_requests(
+        cls,
+        messages: list[dict[str, Any]],
+        records: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Combine transcript PR links with Cursor's tab status without guessing."""
+        discovered: dict[str, re.Match[str]] = {}
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                for match in GITHUB_PULL_REQUEST_RE.finditer(value):
+                    discovered.setdefault(match.group(0), match)
+            elif isinstance(value, dict):
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        for message in messages:
+            collect(message.get("content", []))
+        for record in records:
+            collect(record.get("url"))
+
+        records_by_url: dict[str, dict[str, Any]] = {}
+        for record in records:
+            url = record.get("url")
+            match = GITHUB_PULL_REQUEST_RE.search(url) if isinstance(url, str) else None
+            if match is None:
+                continue
+            canonical_url = match.group(0)
+            existing = records_by_url.get(canonical_url)
+            if existing is None or record.get("lastActiveTime", 0) >= existing.get("lastActiveTime", 0):
+                records_by_url[canonical_url] = record
+
+        fallback = max(records, key=lambda item: item.get("lastActiveTime", 0), default=None)
+        statuses = {
+            "git-merge": "merged",
+            "git-pull-request": "open",
+            "git-pull-request-closed": "closed",
+        }
+        result = []
+        for url, match in discovered.items():
+            record = records_by_url.get(url)
+            if record is None and len(discovered) == 1:
+                record = fallback
+            icon = record.get("statusIcon") if isinstance(record, dict) else None
+            title = record.get("title") if isinstance(record, dict) else None
+            result.append(
+                {
+                    "url": url,
+                    "number": int(match.group("number")),
+                    "repository": f'{match.group("owner")}/{match.group("repo")}',
+                    "title": title if isinstance(title, str) else "",
+                    "status": statuses.get(icon, "unknown"),
+                }
+            )
+        return result
 
     def _projects(self, key: str) -> dict[str, dict[str, Any]]:
         values = self._json_item(key, [])
@@ -432,9 +529,21 @@ class CursorStore:
             content = [{"type": "text", "text": content}]
         if not isinstance(content, list):
             content = [{"type": "unknown", "value": content}]
+        visible_content = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and HIDDEN_INTERNAL_BLOCK_RE.fullmatch(block["text"])
+            )
+        ]
+        if not visible_content:
+            return None
         return {
             "line": line_number,
             "role": raw.get("role") or (message.get("role") if isinstance(message, dict) else None) or "unknown",
-            "content": content,
+            "content": visible_content,
             "raw": raw,
         }
