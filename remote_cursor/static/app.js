@@ -7,6 +7,11 @@ const state = {
   expandedProjects: new Set(),
   collapsedProjects: new Set(),
   repositoriesCollapsed: false,
+  agentStatuses: new Map(),
+  agentStatusAvailable: false,
+  selectedConversation: null,
+  listSignature: "",
+  selectedConversationSignature: "",
 };
 
 const elements = {
@@ -74,6 +79,10 @@ function relativeTime(timestamp) {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(milliseconds));
 }
 
+function signature(value) {
+  return JSON.stringify(value);
+}
+
 function projectLabel(project) {
   const path = String(project?.path || "").replace(/\/$/, "");
   if (path) return path.split("/").filter(Boolean).at(-1) || project?.name || "Other";
@@ -97,6 +106,20 @@ function groupConversations(conversations) {
   return [...groups.values()].sort((a, b) => Number(b.conversations[0]?.updatedAt || 0) - Number(a.conversations[0]?.updatedAt || 0));
 }
 
+function agentStatusFor(conversationId) {
+  const thread = state.agentStatuses.get(conversationId);
+  return thread?.status || (state.agentStatusAvailable ? "unknown" : "unavailable");
+}
+
+function syncSessionRuntime(button, conversation) {
+  const status = agentStatusFor(conversation.id);
+  const running = status === "running";
+  button.dataset.agentStatus = status;
+  button.querySelector(".session-time").hidden = running;
+  button.querySelector(".session-runtime").hidden = !running;
+  button.setAttribute("aria-label", running ? `${conversation.title}, 응답 생성 중` : conversation.title);
+}
+
 function renderSessionButton(conversation) {
   const button = node("button", "session-button");
   button.type = "button";
@@ -108,7 +131,14 @@ function renderSessionButton(conversation) {
   const time = node("time", "session-time", relativeTime(conversation.updatedAt));
   const numeric = Number(conversation.updatedAt);
   if (numeric) time.dateTime = new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString();
-  button.append(title, time);
+  const runtime = node("span", "session-runtime");
+  runtime.append(node("span", "runtime-spinner"));
+  runtime.hidden = true;
+  runtime.setAttribute("aria-hidden", "true");
+  const trailing = node("span", "session-trailing");
+  trailing.append(time, runtime);
+  button.append(title, trailing);
+  syncSessionRuntime(button, conversation);
   button.addEventListener("click", () => selectConversation(conversation.id));
   return button;
 }
@@ -172,6 +202,7 @@ function renderListLoading() {
 }
 
 function renderConversationLoading() {
+  state.selectedConversation = null;
   elements.branchName.textContent = "";
   elements.branchContext.hidden = true;
   elements.branchContext.title = "";
@@ -291,7 +322,10 @@ function renderMarkdown(text) {
   const flushParagraph = () => {
     if (!paragraph.length) return;
     const element = node("p");
-    appendInline(element, paragraph.join("\n"));
+    // Cursor follows CommonMark's soft-break behavior: a single source
+    // newline inside a paragraph becomes ordinary whitespace. Empty lines
+    // still delimit paragraphs below.
+    appendInline(element, paragraph.join(" "));
     shell.append(element);
     paragraph = [];
   };
@@ -338,6 +372,12 @@ function renderMarkdown(text) {
     }
     if (!line.trim()) {
       flushParagraph();
+      index += 1;
+      continue;
+    }
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph();
+      shell.append(node("hr"));
       index += 1;
       continue;
     }
@@ -516,6 +556,28 @@ function renderAssistantTurn(messages) {
   return response;
 }
 
+function syncConversationRuntime() {
+  const messages = elements.content.querySelector(".messages");
+  if (!messages || !state.selectedConversation) return;
+  const running = agentStatusFor(state.selectedConversation.id) === "running";
+  const existing = messages.querySelector(".assistant-generating");
+  if (!running) {
+    existing?.remove();
+    queueGoBottomSync();
+    return;
+  }
+  if (existing) return;
+
+  const indicator = node("div", "assistant-generating");
+  indicator.setAttribute("role", "status");
+  indicator.setAttribute("aria-label", "Cursor Agent가 응답을 생성 중입니다");
+  const status = node("div", "work-status generating-status");
+  status.append(node("span", "runtime-spinner"), node("span", "", "Working…"));
+  indicator.append(status);
+  messages.append(indicator);
+  queueGoBottomSync();
+}
+
 function renderPullRequests(pullRequests) {
   elements.prChipList.replaceChildren();
   const statuses = {
@@ -564,6 +626,8 @@ function queueGoBottomSync() {
 }
 
 function renderConversation(conversation) {
+  state.selectedConversation = conversation;
+  state.selectedConversationSignature = signature(conversation);
   elements.title.textContent = conversation.title;
   elements.title.title = conversation.title;
   elements.meta.textContent = projectLabel(conversation.project);
@@ -596,10 +660,12 @@ function renderConversation(conversation) {
     messages.append(article);
   }
   elements.content.replaceChildren(messages);
+  syncConversationRuntime();
   queueGoBottomSync();
 }
 
 function renderError(title, message) {
+  state.selectedConversation = null;
   elements.branchName.textContent = "";
   elements.branchContext.hidden = true;
   elements.branchContext.title = "";
@@ -648,20 +714,56 @@ async function loadProfile() {
   }
 }
 
-async function loadConversations({ preserveSelection = true } = {}) {
+function applyAgentStatus(payload) {
+  const previousSelectedStatus = state.selectedId ? agentStatusFor(state.selectedId) : "unavailable";
+  state.agentStatusAvailable = payload?.available === true;
+  state.agentStatuses = new Map(
+    (Array.isArray(payload?.threads) ? payload.threads : [])
+      .filter((thread) => typeof thread?.id === "string")
+      .map((thread) => [thread.id, thread]),
+  );
+
+  for (const conversation of state.conversations) {
+    const button = elements.list.querySelector(`.session-button[data-id="${CSS.escape(conversation.id)}"]`);
+    if (button) syncSessionRuntime(button, conversation);
+  }
+  syncConversationRuntime();
+
+  const selectedStatus = state.selectedId ? agentStatusFor(state.selectedId) : "unavailable";
+  if (selectedStatus === "running" && previousSelectedStatus !== "running") {
+    elements.announcer.textContent = "Cursor Agent가 응답 생성을 시작했습니다.";
+  } else if (previousSelectedStatus === "running" && selectedStatus !== "running") {
+    elements.announcer.textContent = "Cursor Agent가 응답 생성을 마쳤습니다.";
+  }
+}
+
+async function loadAgentStatus() {
+  try {
+    applyAgentStatus(await fetchJson("/api/agent-status"));
+  } catch {
+    applyAgentStatus({ available: false, threads: [] });
+  }
+}
+
+async function loadConversations({ preserveSelection = true, background = false } = {}) {
   const params = new URLSearchParams({ archived: state.archived ? "1" : "0", limit: "500" });
   if (state.query) params.set("q", state.query);
   try {
     const payload = await fetchJson(`/api/conversations?${params}`);
+    const nextSignature = signature(payload.conversations);
+    const listChanged = state.listSignature !== nextSignature;
     state.conversations = payload.conversations;
+    state.listSignature = nextSignature;
     if (!preserveSelection || !state.selectedId) {
       state.selectedId = payload.selectedId && state.conversations.some((item) => item.id === payload.selectedId)
         ? payload.selectedId
         : state.conversations[0]?.id || null;
     }
-    renderList();
+    if (listChanged) renderList();
     setConnection(true, `${payload.count} sessions`);
-    if (state.selectedId && !state.loadingConversation) await loadConversation(state.selectedId, false);
+    if (state.selectedId && !state.loadingConversation) {
+      await loadConversation(state.selectedId, false, { showLoading: !background });
+    }
   } catch (error) {
     state.conversations = [];
     renderList();
@@ -670,14 +772,14 @@ async function loadConversations({ preserveSelection = true } = {}) {
   }
 }
 
-async function loadConversation(conversationId, announce = true) {
+async function loadConversation(conversationId, announce = true, { showLoading = announce } = {}) {
   if (!conversationId) return;
   state.loadingConversation = true;
-  renderConversationLoading();
+  if (showLoading) renderConversationLoading();
   try {
     const conversation = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}`);
     if (state.selectedId !== conversationId) return;
-    renderConversation(conversation);
+    if (state.selectedConversationSignature !== signature(conversation)) renderConversation(conversation);
     if (announce) elements.announcer.textContent = `${conversation.title} 대화를 열었습니다.`;
   } catch (error) {
     if (state.selectedId === conversationId) renderError("대화를 불러오지 못했습니다", error.message);
@@ -694,7 +796,7 @@ async function selectConversation(conversationId) {
   history.replaceState(null, "", url);
   renderList();
   if (sidebarMedia.matches) closeSidebar();
-  await loadConversation(conversationId);
+  await loadConversation(conversationId, true, { showLoading: true });
 }
 
 function setConnection(online, message) {
@@ -795,8 +897,8 @@ syncSidebarControls();
 
 function connectEvents() {
   const events = new EventSource("/api/events");
-  events.addEventListener("change", async () => {
-    await loadConversations();
+  events.addEventListener("data.changed", async () => {
+    await loadConversations({ background: true });
     elements.announcer.textContent = "Cursor의 최신 변경사항을 반영했습니다.";
   });
   events.onerror = () => setConnection(false, "Reconnecting…");
@@ -806,4 +908,5 @@ function connectEvents() {
 renderListLoading();
 loadProfile();
 loadConversations({ preserveSelection: true });
+loadAgentStatus();
 connectEvents();
