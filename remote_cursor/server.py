@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .desktop_bridge import DesktopBridgeClient
+from .events import CursorChangeMonitor, EventBroker
 from .store import CursorStore
 
 
@@ -24,14 +26,57 @@ ID_PATTERN = re.compile(r"^[A-Za-z0-9:_{}\-.,\"/]+$")
 class RemoteCursorServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], store: CursorStore) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        store: CursorStore,
+        desktop_bridge: DesktopBridgeClient | None = None,
+    ) -> None:
         super().__init__(address, RemoteCursorHandler)
         self.store = store
+        self.desktop_bridge = desktop_bridge or DesktopBridgeClient()
+        self.events = EventBroker()
+        self.change_monitor = CursorChangeMonitor(self._watch_paths(), self._publish_data_change)
         self.allowed_users = {
             value.strip().casefold()
             for value in os.environ.get("REMOTE_CURSOR_ALLOWED_USERS", "").split(",")
             if value.strip()
         }
+
+    def _watch_paths(self) -> list[Path]:
+        if not hasattr(self.store, "paths"):
+            return []
+        paths = [
+            self.store.paths.global_state,
+            self.store.paths.global_state.parent,
+            self.store.paths.search_db,
+            self.store.paths.search_db.parent,
+            self.store.paths.projects_dir,
+        ]
+        try:
+            # kqueue directory events only report entries directly below that
+            # directory. Cursor appends to the existing JSONL file, which does
+            # not mutate its parent directory, so active transcripts must be
+            # watched as files.
+            paths.extend(self.store._get_transcript_index().values())
+        except OSError:
+            pass
+        return list(dict.fromkeys(paths))
+
+    def _publish_data_change(self) -> None:
+        """Publish the versioned event and support already-open Phase 1 clients."""
+        self.events.publish("data.changed")
+        # Clients loaded before the event protocol upgrade only subscribe to
+        # ``change``. Keeping this compatibility event lets a long-lived mobile
+        # tab recover without requiring a manual reload.
+        self.events.publish("change")
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        self.change_monitor.start()
+        try:
+            super().serve_forever(poll_interval=poll_interval)
+        finally:
+            self.change_monitor.stop()
 
 
 class RemoteCursorHandler(BaseHTTPRequestHandler):
@@ -46,6 +91,8 @@ class RemoteCursorHandler(BaseHTTPRequestHandler):
             return self._json(self.server.store.health())
         if parsed.path == "/api/profile":
             return self._json(self.server.store.profile())
+        if parsed.path == "/api/agent-status":
+            return self._json(self.server.desktop_bridge.snapshot())
         if parsed.path == "/api/profile/avatar":
             avatar = self.server.store.profile_avatar()
             if avatar is None:
@@ -101,19 +148,28 @@ class RemoteCursorHandler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self._security_headers()
         self.end_headers()
-        last_token = self.server.store.change_token()
+        try:
+            last_event_id = int(self.headers.get("Last-Event-ID", "0"))
+        except ValueError:
+            last_event_id = 0
         last_heartbeat = time.monotonic()
         try:
-            self.wfile.write(b"retry: 2000\nevent: ready\ndata: {}\n\n")
+            self.wfile.write(b"retry: 2000\nevent: ready\ndata: {\"version\":2}\n\n")
+            # Existing tabs may still run the original client, which only knows
+            # the unversioned ``change`` event. Ask those tabs to refresh their
+            # data once after a reconnect; v2 clients ignore this event.
+            self.wfile.write(b"event: change\ndata: {\"reason\":\"connected\"}\n\n")
             self.wfile.flush()
             while True:
-                time.sleep(1)
-                token = self.server.store.change_token()
-                if token != last_token:
-                    payload = json.dumps({"token": token}, separators=(",", ":")).encode()
-                    self.wfile.write(b"event: change\ndata: " + payload + b"\n\n")
+                events = self.server.events.after(last_event_id, timeout=15)
+                if events:
+                    for event in events:
+                        payload = json.dumps(event.payload, separators=(",", ":")).encode()
+                        self.wfile.write(
+                            f"id: {event.event_id}\nevent: {event.name}\ndata: ".encode() + payload + b"\n\n"
+                        )
+                        last_event_id = event.event_id
                     self.wfile.flush()
-                    last_token = token
                 elif time.monotonic() - last_heartbeat >= 15:
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()

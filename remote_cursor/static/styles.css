@@ -297,6 +297,30 @@ button.micro-button[aria-pressed="true"] { background: var(--surface-active); co
   text-align: end;
   white-space: nowrap;
 }
+.session-trailing {
+  display: grid;
+  min-width: 27px;
+  place-items: center end;
+}
+.session-time,
+.session-runtime { grid-area: 1 / 1; }
+.session-time[hidden],
+.session-runtime[hidden] { display: none; }
+.session-runtime {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+}
+.runtime-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border: 1.5px solid rgba(174, 178, 179, .34);
+  border-block-start-color: #b6babb;
+  border-radius: 50%;
+}
 .session-button[aria-current="page"] .session-time { color: #a1a6a7; }
 .more-sessions {
   display: block;
@@ -466,7 +490,12 @@ body.sidebar-collapsed .collapsed-sidebar-tools { display: flex; }
   margin-inline: auto;
   padding: 40px 32px 176px;
 }
-.turn { min-width: 0; margin-block-end: 26px; }
+.turn {
+  min-width: 0;
+  margin-block-end: 26px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
 .user-message {
   min-width: 0;
   margin-block: 0 7px;
@@ -477,6 +506,18 @@ body.sidebar-collapsed .collapsed-sidebar-tools { display: flex; }
   color: #e3e4e4;
 }
 .assistant-response { min-width: 0; padding: 0 10px; }
+.assistant-generating {
+  min-width: 0;
+  padding: 0 10px;
+}
+.generating-status {
+  gap: 7px;
+  color: #9fa3a4;
+}
+.generating-status .runtime-spinner {
+  width: 12px;
+  height: 12px;
+}
 .work-status {
   display: flex;
   min-height: 28px;
@@ -525,7 +566,13 @@ body.sidebar-collapsed .collapsed-sidebar-tools { display: flex; }
 .text-block + .text-block { margin-block-start: 10px; }
 .markdown > :first-child { margin-block-start: 0; }
 .markdown > :last-child { margin-block-end: 0; }
-.markdown p { margin: 0 0 10px; white-space: pre-wrap; }
+.markdown p { margin: 0 0 10px; }
+.markdown hr {
+  height: 1px;
+  margin: 17px 0;
+  border: 0;
+  background: var(--border-surface);
+}
 .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
   margin: 15px 0 7px;
   color: var(--text);
@@ -929,12 +976,14 @@ body.sidebar-collapsed .collapsed-sidebar-tools { display: flex; }
   .app-shell { transition: grid-template-columns 160ms cubic-bezier(.2, 0, 0, 1); }
   .sidebar { transition-property: opacity, border-color; transition-duration: 120ms; }
   .skeleton { animation: shimmer 1.5s infinite linear; }
+  .runtime-spinner { animation: runtime-spin 850ms linear infinite; }
   .go-bottom-button::before {
     transition-property: background-color, border-color, scale;
     transition-duration: 100ms;
     transition-timing-function: ease-out;
   }
   @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes runtime-spin { to { rotate: 360deg; } }
 }
 
 @media (max-width: 46rem) {

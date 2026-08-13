@@ -1,8 +1,10 @@
 # Remote Cursor
 
-A read-only, Tailscale-first web mirror for Cursor's Agent Window.
+A Tailscale-first web companion for local Cursor Agents sessions shown in Cursor's Agent Window.
 
-It shows local agent sessions and transcripts in a browser without modifying Cursor data. Message sending is intentionally unavailable in Phase 1.
+Remote Cursor mirrors agent sessions and transcripts in a browser without modifying Cursor data. Phase 1 is read-only; Phase 2 will add text follow-ups through Cursor's local Desktop Bridge.
+
+This project targets **Cursor Agents**, not remote control of the **Cursor IDE**. The editor, file explorer, terminal, diffs, extensions, and embedded browser are intentionally out of scope.
 
 ## Security model
 
@@ -18,7 +20,8 @@ The server binds to `127.0.0.1` by default. Keep this default and expose it thro
 - Repository-grouped Cursor agent sessions
 - Full local transcript rendering
 - Session search and archived sessions
-- Live updates when Cursor data changes
+- Event-driven live updates: one local Cursor watcher fans out SSE events to every browser
+- Live running-state indicators when Cursor Desktop Bridge is enabled
 - Local Cursor profile details
 - Read-only SQLite access and no write endpoints
 
@@ -63,6 +66,7 @@ Separate multiple logins with commas. This check trusts the `Tailscale-User-Logi
 | `REMOTE_CURSOR_ALLOWED_USERS` | Empty | Comma-separated Tailscale logins |
 | `REMOTE_CURSOR_HOST` | `127.0.0.1` | Local bind address; keep the default |
 | `REMOTE_CURSOR_PORT` | `4310` | Local server port |
+| `REMOTE_CURSOR_CLI` | Auto-detected | Cursor desktop CLI override |
 | `CURSOR_HOME` | `~/.cursor` | Cursor home override |
 | `CURSOR_USER_DATA` | OS default | Cursor user-data override |
 
@@ -75,6 +79,12 @@ Remote Cursor reads these Cursor-managed files:
 - `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
 
 All SQLite connections use read-only mode and `PRAGMA query_only`. `POST`, `PUT`, and `DELETE` requests return `405 Method Not Allowed`.
+
+## Performance model
+
+Remote Cursor does not poll Cursor files from every browser connection. A single local watcher waits for Cursor data changes and publishes a small SSE invalidation event to connected browsers. Browsers keep their existing transcript DOM during background updates; unchanged session lists and conversations are not re-rendered.
+
+On macOS the watcher uses the operating system's kqueue notification mechanism and is idle while Cursor data is unchanged. Other platforms use one conservative fallback watcher until native backends are added.
 
 ## Development
 
